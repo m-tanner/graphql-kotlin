@@ -1,29 +1,10 @@
-*.iml
-.idea/
-.DS_Store
-target/
-pom.xml.versionsBackup
-
-# gradle ignore
-.gradle
-build/
-out/
-
-# Ignore Gradle GUI config
-gradle-app.setting
-
-# Avoid ignoring Gradle wrapper jar file (.jar files are usually ignored)
-!gradle-wrapper.jar
-
-# Cache of project
-.gradletasknamecache
-
-# # Work around https://youtrack.jetbrains.com/issue/IDEA-116898
-# gradle/wrapper/gradle-wrapper.properties
-
 .idea/*
 **/.idea/*
+*.iml
+.gradle
 local.properties
+
+*~
 
 build
 src/jsMain/web
@@ -79,8 +60,10 @@ Temporary Items
 .apdisk
 
 # Maven .gitignore (https://raw.githubusercontent.com/github/gitignore/master/Maven.gitignore)
+target/
 pom.xml.tag
 pom.xml.releaseBackup
+pom.xml.versionsBackup
 pom.xml.next
 release.properties
 dependency-reduced-pom.xml

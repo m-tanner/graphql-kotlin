@@ -1,0 +1,24 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kubernetes.io/change-cause: "Release of : @release@"
+  name: hello-kotlin-service
+spec:
+  template:
+    metadata:
+      annotations:
+        release: "@release@"
+    spec:
+      containers:
+        - name: hello-kotlin-service
+          image: "@docker-registry.url@/hello-kotlin-service:@release@"
+---
+kind: VirtualService
+apiVersion: networking.istio.io/v1alpha3
+metadata:
+  name: hello-kotlin-service
+spec:
+  hosts:
+    - hello-kotlin-service.HOSTNAME.com

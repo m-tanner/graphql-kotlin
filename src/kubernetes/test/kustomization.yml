@@ -1,0 +1,11 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+bases:
+  - ../base
+nameSuffix: "-@git.commit.id.abbrev@"
+namespace: k8s-project-name-test
+commonLabels:
+  app: hello-kotlin-service-@git.commit.id.abbrev@
+patchesStrategicMerge:
+  - patch.yml

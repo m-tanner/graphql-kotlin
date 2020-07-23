@@ -1,0 +1,8 @@
+---
+kind: VirtualService
+apiVersion: networking.istio.io/v1alpha3
+metadata:
+  name: hello-kotlin-service
+spec:
+  hosts:
+    - dev-hello-kotlin-service.HOSTNAME.com

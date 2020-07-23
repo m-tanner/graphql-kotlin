@@ -1,6 +1,0 @@
-mutation DeleteObjectMutation($id: Int!) {
-    deleteBasicObject(id: $id) {
-        id
-        name
-    }
-}

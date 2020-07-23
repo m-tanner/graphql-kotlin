@@ -1,0 +1,12 @@
+---
+kind: VirtualService
+apiVersion: networking.istio.io/v1alpha3
+metadata:
+  name: hello-kotlin-service
+spec:
+  hosts:
+    - test-hello-kotlin-service-@git.commit.id.abbrev@.dev1.HOSTNAME.com
+  http:
+    - route:
+        - destination:
+            host: hello-kotlin-service-@git.commit.id.abbrev@.k8s-project-name-test.svc.cluster.local

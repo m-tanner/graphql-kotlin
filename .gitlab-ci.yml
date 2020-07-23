@@ -1,0 +1,349 @@
+variables:
+  MAVEN_OPTS: -Dmaven.repo.local=.m2/repository -Xmx2048m -Xms256m -XshowSettings:vm
+  MAVEN_TEST_OPTS: -pl . clean verify jacoco:check
+  MAVEN_BUILD_OPTS: -pl . package generate-resources -P docker,default -DskipDocker -DskipTests
+  MAVEN_INTEG_OPTS: -pl integration-tests clean verify # currently unused
+  MAVEN_IMAGE: path/to/maven/docker/image
+  CURL_OPTIONS: -vkf
+  K8S_NAMESPACE: FILL_IN
+  K8S_NAMESPACE_TEST: FILL_IN-test
+  K8S_MANIFEST_FOLDER: target/kubernetes
+  SERVICE_NAME: hello-kotlin-service
+  IMAGE_NAME: hello-kotlin-service
+  BASE_URL_PATH: ""
+  DOCKER_BUILD_OPTIONS: ""
+  DOCKER_BUILD_PATH: "./"
+  DOCKER_IMAGE: ${DOCKER_REPO}/${IMAGE_NAME}
+  DOCKER_IMAGE_TAG: latest
+  DOCKER_REPO: FILL_IN
+  DOCKERFILE_PATH: Dockerfile
+
+.except_tags: &except_tags
+  except:
+    - tags
+
+.only_master: &only_master
+  only:
+    - master
+
+.only_merge_requests:
+  only:
+    - merge_requests
+
+.only_branches:
+  only:
+    - branches
+
+.only_tags:
+  only:
+    - tags
+
+.k8s_runner: &k8s_runner
+  tags:
+    - kubernetes_runner
+
+.maven_common: &maven_common
+  <<: *except_tags
+  <<: *k8s_runner
+  image: ${MAVEN_IMAGE}
+  stage: maven
+  cache:
+    paths:
+      - .m2/repository
+
+.k8s_common:
+  <<: *except_tags
+  <<: *k8s_runner
+  image: path/to/kubectl/image
+  variables:
+    DOCKER_REGISTRY: registry-url
+
+.k8s_deploys: &k8s_deploys
+  before_script:
+    - find ${K8S_MANIFEST_FOLDER}/${K8S_MANIFEST_FILES} -type f -exec sed -i.bak "s/@git.commit.id.abbrev@/${CI_COMMIT_SHA:0:7}/g" {} \;
+    - find ${K8S_MANIFEST_FOLDER}/${K8S_MANIFEST_FILES} -type f -exec sed -i.bak "s/@gitCommit@/${CI_COMMIT_SHA:0:7}/g" {} \;
+    - find ${K8S_MANIFEST_FOLDER}/${K8S_MANIFEST_FILES} -type f -exec sed -i.bak "s/@docker-registry.url@/${DOCKER_REGISTRY}/g" {} \;
+    - kubectl kustomize ${K8S_MANIFEST_FOLDER}/${K8S_MANIFEST_FILES}
+
+.docker_common:
+  <<: *except_tags
+  image: path/to/image/docker
+  tags:
+    - docker-build
+
+stages:
+  - maven
+  - docker
+  - test:deploy
+  - test:verify
+  - test:test
+  - test:cleanup
+  - dev:deploy
+  - dev:verify
+  - stg:deploy
+  - stg:verify
+  - release
+  - prod:deploy
+  - prod:verify
+  - tag
+
+mvn:test:
+  <<: *maven_common
+  script:
+    - mvn --batch-mode ${MAVEN_TEST_OPTS}
+    - cat target/site/jacoco/index.html | grep -o '<tfoot>.*</tfoot>'
+  coverage: '/Total.*?([0-9]{1,3})%/'
+  artifacts:
+    expire_in: 24 hrs
+    reports:
+      junit:
+        - target/surefire-reports/TEST-*.xml
+
+mvn:build:
+  <<: *maven_common
+  script:
+    - mvn --batch-mode ${MAVEN_BUILD_OPTS}
+  artifacts:
+    paths:
+      - target/docker
+      - target/kubernetes
+    expire_in: 24 hrs
+    untracked: true
+
+mvn:sonar:
+  <<: *maven_common
+  <<: *only_master
+  script:
+    - mvn org.sonarsource.scanner.maven:sonar-maven-plugin:3.2:sonar
+
+docker:upload:
+  extends: .docker_common
+  variables:
+    DOCKERFILE_PATH: target/docker/Dockerfile
+    DOCKER_BUILD_PATH: target/docker
+  stage: docker
+  script:
+    - echo ${REGISTRY_PASSWORD} | docker login -u ${REGISTRY_USERNAME} --password-stdin ${DOCKER_REPO}
+    - docker build ${DOCKER_BUILD_OPTIONS} -t ${DOCKER_IMAGE}:${CI_COMMIT_SHA:0:7} -f ${DOCKERFILE_PATH} ${DOCKER_BUILD_PATH}
+    - docker push ${DOCKER_IMAGE}:${CI_COMMIT_SHA:0:7}
+  retry: 2
+  needs:
+    - job: mvn:build
+      artifacts: true
+
+test:deploy:
+  extends: .k8s_common
+  <<: *k8s_deploys
+  variables:
+    K8S_CONTEXT: dev1
+    K8S_TOKEN: ${K8S_TOKEN_DEV}
+    K8S_MANIFEST_FILES: test
+    NAMESPACE: ${K8S_NAMESPACE_TEST}
+  environment:
+    name: "integ/aws/${CI_COMMIT_REF_NAME}"
+    url: https://test-${SERVICE_NAME}-${CI_COMMIT_SHA:0:7}.dev1.HOSTNAME.com/${BASE_URL_PATH}
+  stage: test:deploy
+  script:
+    - kubectl --context=$K8S_CONTEXT --token=$K8S_TOKEN -n ${NAMESPACE} apply -k ${K8S_MANIFEST_FOLDER}/${K8S_MANIFEST_FILES} --record=false
+  dependencies:
+    - mvn:build
+
+test:verify:
+  extends: .k8s_common
+  variables:
+    K8S_CONTEXT: dev1
+    K8S_TOKEN: ${K8S_TOKEN_DEV}
+    NAMESPACE: ${K8S_NAMESPACE_TEST}
+  environment:
+    name: "integ/aws/${CI_COMMIT_REF_NAME}"
+    url: https://test-${SERVICE_NAME}-${CI_COMMIT_SHA:0:7}.dev1.HOSTNAME.com/${BASE_URL_PATH}
+  stage: test:verify
+  script:
+    - kubectl --context=$K8S_CONTEXT --token=$K8S_TOKEN -n ${NAMESPACE} rollout status -w deployment/${SERVICE_NAME}-${CI_COMMIT_SHA:0:7}
+  retry: 2
+  dependencies: []
+
+test:test:
+  <<: *maven_common
+  stage: test:test
+  script:
+    - echo ${SERVICE_NAME}
+    - echo ${CI_COMMIT_SHA:0:7}
+    - curl ${CURL_OPTIONS} https://test-${SERVICE_NAME}-${CI_COMMIT_SHA:0:7}.dev1.HOSTNAME.com/actuator/health
+  #   Needs integration tests added back in here
+  dependencies: []
+
+test:cleanup:
+  extends: .k8s_common
+  <<: *k8s_deploys
+  variables:
+    K8S_CONTEXT: dev1
+    K8S_TOKEN: ${K8S_TOKEN_DEV}
+    K8S_MANIFEST_FILES: test
+    NAMESPACE: ${K8S_NAMESPACE_TEST}
+  stage: test:cleanup
+  script:
+    - if kubectl --context=$K8S_CONTEXT --token=$K8S_TOKEN -n ${NAMESPACE} get deployment/${SERVICE_NAME}-${CI_COMMIT_SHA:0:7};
+      then kubectl --context=$K8S_CONTEXT --token=$K8S_TOKEN -n ${NAMESPACE} logs deployment/${SERVICE_NAME}-${CI_COMMIT_SHA:0:7} --all-containers || true;
+      kubectl --context=$K8S_CONTEXT --token=$K8S_TOKEN -n ${NAMESPACE} delete -k ${K8S_MANIFEST_FOLDER}/${K8S_MANIFEST_FILES};
+      else echo "No deployment to log or delete";
+      fi;
+  when: always
+  allow_failure: true
+  dependencies:
+    - mvn:build
+
+dev:deploy:
+  extends: .k8s_common
+  <<: *k8s_deploys
+  <<: *only_master
+  variables:
+    K8S_CONTEXT: dev1
+    K8S_TOKEN: ${K8S_TOKEN_DEV}
+    K8S_MANIFEST_FILES: dev
+    NAMESPACE: ${K8S_NAMESPACE}
+  environment:
+    name: live/aws/dev
+    url: https://dev-${SERVICE_NAME}.HOSTNAME.com/${BASE_URL_PATH}
+  stage: dev:deploy
+  script:
+    - kubectl --context=$K8S_CONTEXT --token=$K8S_TOKEN -n ${NAMESPACE} apply -k ${K8S_MANIFEST_FOLDER}/${K8S_MANIFEST_FILES} --record=false
+  when: manual
+  allow_failure: false
+  needs:
+    - job: mvn:build
+      artifacts: true
+    - job: docker:upload
+      artifacts: false
+
+
+dev:verify:
+  extends: .k8s_common
+  <<: *only_master
+  variables:
+    K8S_CONTEXT: dev1
+    K8S_TOKEN: ${K8S_TOKEN_DEV}
+    NAMESPACE: ${K8S_NAMESPACE}
+  environment:
+    name: live/aws/dev
+    url: https://dev-${SERVICE_NAME}.HOSTNAME.com/${BASE_URL_PATH}
+  script:
+    - kubectl --context=$K8S_CONTEXT --token=$K8S_TOKEN -n ${NAMESPACE} rollout status -w deployment/${SERVICE_NAME}
+  stage: dev:verify
+  retry: 2
+  dependencies: []
+
+stg:deploy:
+  extends: .k8s_common
+  <<: *k8s_deploys
+  <<: *only_master
+  variables:
+    K8S_CONTEXT: stage1
+    K8S_TOKEN: ${K8S_TOKEN_STAGE}
+    K8S_MANIFEST_FILES: stg
+    NAMESPACE: ${K8S_NAMESPACE}
+  environment:
+    name: live/aws/stage
+    url: https://stg-${SERVICE_NAME}.HOSTNAME.com/${BASE_URL_PATH}
+  script:
+    - kubectl --context=$K8S_CONTEXT --token=$K8S_TOKEN -n ${NAMESPACE} apply -k ${K8S_MANIFEST_FOLDER}/${K8S_MANIFEST_FILES} --record=false
+  stage: stg:deploy
+  when: manual
+  allow_failure: false
+  needs:
+    - job: mvn:build
+      artifacts: true
+    - job: docker:upload
+      artifacts: false
+
+stg:verify:
+  extends: .k8s_common
+  <<: *only_master
+  variables:
+    K8S_CONTEXT: stage1
+    K8S_TOKEN: ${K8S_TOKEN_STAGE}
+    NAMESPACE: ${K8S_NAMESPACE}
+  environment:
+    name: live/aws/stage
+    url: https://stg-${SERVICE_NAME}.HOSTNAME.com/${BASE_URL_PATH}
+  script:
+    - kubectl --context=$K8S_CONTEXT --token=$K8S_TOKEN -n ${NAMESPACE} rollout status -w deployment/${SERVICE_NAME}
+  stage: stg:verify
+  retry: 2
+  dependencies: []
+
+release:
+  <<: *only_master
+  extends: .docker_common
+  script:
+    - RELEASE_TAG=`date +"release-%Y%m%d%H%M"`
+    - mkdir release
+    - echo $RELEASE_TAG > release/RELEASE_TAG.out
+    - echo ${REGISTRY_PASSWORD} | docker login -u ${REGISTRY_USERNAME} --password-stdin ${DOCKER_REPO}
+    - docker pull ${DOCKER_IMAGE}:${CI_COMMIT_SHA:0:7}
+    - docker tag ${DOCKER_IMAGE}:${CI_COMMIT_SHA:0:7} ${DOCKER_IMAGE}:$RELEASE_TAG
+    - docker push ${DOCKER_IMAGE}:$RELEASE_TAG
+  artifacts:
+    paths:
+      - release/
+    untracked: true
+  stage: release
+  dependencies: []
+
+prod:deploy:
+  extends: .k8s_common
+  <<: *k8s_deploys
+  <<: *only_master
+  variables:
+    K8S_CONTEXT: prod1
+    K8S_TOKEN: ${K8S_TOKEN_PROD}
+    K8S_MANIFEST_FILES: prod
+    RELEASE_TAG_FILE: release/RELEASE_TAG.out
+    NAMESPACE: ${K8S_NAMESPACE}
+  environment:
+    name: live/aws/prod
+    url: https://${SERVICE_NAME}.HOSTNAME.com/${BASE_URL_PATH}
+  script:
+    - RELEASE_TAG=`cat "${RELEASE_TAG_FILE}"`
+    - find ${K8S_MANIFEST_FOLDER}/${K8S_MANIFEST_FILES} -type f -exec sed -i.bak "s/@release@/$RELEASE_TAG/g" {} \;
+    - kubectl --context=$K8S_CONTEXT --token=$K8S_TOKEN -n ${NAMESPACE} apply -k ${K8S_MANIFEST_FOLDER}/${K8S_MANIFEST_FILES} --record=false
+  stage: prod:deploy
+  when: manual
+  allow_failure: false
+  dependencies:
+    - mvn:build
+    - release
+
+prod:verify:
+  extends: .k8s_common
+  <<: *only_master
+  variables:
+    K8S_CONTEXT: prod1
+    K8S_TOKEN: ${K8S_TOKEN_PROD}
+    NAMESPACE: ${K8S_NAMESPACE}
+  environment:
+    name: live/aws/prod
+    url: https://${SERVICE_NAME}.HOSTNAME.com/${BASE_URL_PATH}
+  script:
+    - kubectl --context=$K8S_CONTEXT --token=$K8S_TOKEN -n ${NAMESPACE} rollout status -w deployment/${SERVICE_NAME}
+  stage: prod:verify
+  retry: 2
+  dependencies: []
+
+tag:
+  extends: .k8s_common
+  <<: *only_master
+  variables:
+    RELEASE_TAG_FILE: release/RELEASE_TAG.out
+  environment:
+    name: live/aws/prod
+    url: https://${SERVICE_NAME}.HOSTNAME.com/${BASE_URL_PATH}
+  stage: tag
+  script:
+    - RELEASE_TAG=`cat "${RELEASE_TAG_FILE}"`
+    - git config --global user.name "${GITLAB_USER_NAME}"
+    - git config --global user.email "${GITLAB_USER_EMAIL}"
+    - git tag -f $RELEASE_TAG ${CI_COMMIT_SHA}
+    - git push https://${DEPLOYMENT_USER}:${DEPLOYMENT_PASSWORD}@gitlab.HOSTNAME.com/${CI_PROJECT_PATH}.git --tags
+  dependencies:
+    - release

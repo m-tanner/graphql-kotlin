@@ -1,6 +1,0 @@
-query RetrieveObjectQuery($id: Int!) {
-    retrieveBasicObject(id: $id) {
-        id
-        name
-    }
-}

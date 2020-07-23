@@ -1,0 +1,13 @@
+---
+kind: VirtualService
+apiVersion: networking.istio.io/v1alpha3
+metadata:
+  name: hello-kotlin-service
+spec:
+  gateways:
+    - star-cert.istio-system
+  hosts: []
+  http:
+    - route:
+        - destination:
+            host: hello-kotlin-service.k8s-project-name.svc.cluster.local

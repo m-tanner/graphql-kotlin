@@ -1,0 +1,10 @@
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: hello-kotlin-service
+spec:
+  ports:
+    - name: tcp-node
+      port: 8080
+      targetPort: 8080

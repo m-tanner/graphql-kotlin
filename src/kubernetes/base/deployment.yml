@@ -1,0 +1,61 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kubernetes.io/change-cause: "Commit: @git.commit.id.abbrev@"
+  name: hello-kotlin-service
+spec:
+  progressDeadlineSeconds: 300
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hello-kotlin-service
+  template:
+    metadata:
+      annotations:
+        git_commit_id: "@git.commit.id.abbrev@"
+    spec:
+      imagePullSecrets:
+        - name: name-of-secret
+      containers:
+        - name: hello-kotlin-service
+          image: "@docker-registry.url@/hello-kotlin-service:@git.commit.id.abbrev@"
+          envFrom:
+            - configMapRef:
+                name: hello-kotlin-service
+          ports:
+            - name: health-port
+              containerPort: 8080
+              hostPort: 8080
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: health-port
+            failureThreshold: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: health-port
+            initialDelaySeconds: 15
+            timeoutSeconds: 1
+            periodSeconds: 10
+            failureThreshold: 6
+            successThreshold: 1
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: health-port
+            initialDelaySeconds: 15
+            timeoutSeconds: 1
+            periodSeconds: 10
+            failureThreshold: 6
+            successThreshold: 1
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
